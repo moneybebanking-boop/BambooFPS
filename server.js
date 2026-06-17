@@ -31,15 +31,15 @@ io.on("connection", socket => {
         y: 1.7,
         z: 0,
         yaw: 0,
-        pitch: 0
+        pitch: 0,
+        mode: "menu",
+        health: 100
     };
 
     socket.emit("currentPlayers", players);
     socket.broadcast.emit("playerJoined", players[socket.id]);
 
     socket.on("updatePlayer", data => {
-        if (!players[socket.id]) return;
-
         players[socket.id] = {
             ...players[socket.id],
             ...data,
@@ -63,6 +63,11 @@ io.on("connection", socket => {
         io.emit("playerLeft", socket.id);
     });
 });
+
+// Backup sync every second
+setInterval(() => {
+    io.emit("currentPlayers", players);
+}, 1000);
 
 const PORT = process.env.PORT || 3000;
 
