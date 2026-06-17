@@ -18,7 +18,7 @@ const io = new Server(server, {
 const players = {};
 
 app.get("/", (req, res) => {
-    res.send("Bamboo FPS multiplayer server is running");
+    res.send("Bamboo FPS multiplayer server is running with PVP");
 });
 
 io.on("connection", socket => {
@@ -40,13 +40,61 @@ io.on("connection", socket => {
     socket.broadcast.emit("playerJoined", players[socket.id]);
 
     socket.on("updatePlayer", data => {
+        if (!players[socket.id]) return;
+
+        const oldHealth = players[socket.id].health ?? 100;
+
         players[socket.id] = {
             ...players[socket.id],
             ...data,
-            id: socket.id
+            id: socket.id,
+            // Preserve server-side PVP health unless the player is respawning/resetting.
+            health: Number(data?.health ?? oldHealth)
         };
 
         socket.broadcast.emit("playerMoved", players[socket.id]);
+    });
+
+    socket.on("playerShot", data => {
+        const attacker = players[socket.id];
+        const targetId = data?.targetId;
+        const target = players[targetId];
+
+        if (!attacker || !target || targetId === socket.id) return;
+
+        const rawDamage = Number(data?.damage || 0);
+        const damage = Math.max(0, Math.min(rawDamage, 150));
+        if (damage <= 0) return;
+
+        target.health = Math.max(0, (target.health ?? 100) - damage);
+
+        io.to(targetId).emit("pvpDamaged", {
+            attackerId: socket.id,
+            attackerName: attacker.name || "Player",
+            damage,
+            targetHealth: target.health
+        });
+
+        socket.emit("pvpHitConfirmed", {
+            targetId,
+            targetName: target.name || "Player",
+            damage,
+            targetHealth: target.health
+        });
+
+        if (target.health <= 0) {
+            io.emit("pvpKilled", {
+                killerId: socket.id,
+                killerName: attacker.name || "Player",
+                victimId: targetId,
+                victimName: target.name || "Player"
+            });
+
+            // Respawn target health on the server so they can keep playing.
+            target.health = 100;
+        }
+
+        io.emit("currentPlayers", players);
     });
 
     socket.on("chatMessage", msg => {
