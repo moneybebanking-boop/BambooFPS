@@ -22,7 +22,6 @@ app.get("/", (req, res) => {
 });
 
 io.on("connection", socket => {
-
     console.log("Player connected:", socket.id);
 
     players[socket.id] = {
@@ -43,107 +42,91 @@ io.on("connection", socket => {
     socket.broadcast.emit("playerJoined", players[socket.id]);
 
     socket.on("updatePlayer", data => {
-
         if (!players[socket.id]) return;
 
         players[socket.id] = {
             ...players[socket.id],
             ...data,
-            id: socket.id
+            id: socket.id,
+            health: players[socket.id].health
         };
 
         socket.broadcast.emit("playerMoved", players[socket.id]);
-
     });
 
     socket.on("chatMessage", msg => {
-
         io.emit("chatMessage", {
             id: socket.id,
             name: players[socket.id]?.name || "Player",
             message: msg
         });
-
     });
 
-    // =========================
-    // PvP DAMAGE SYSTEM
-    // =========================
-
-    function handleDamage(attackerId, data) {
-
+    function handlePvpShot(data) {
+        const attacker = players[socket.id];
         const victim = players[data.targetId];
-        const attacker = players[attackerId];
 
-        if (!victim || !attacker) return;
+        if (!attacker || !victim) return;
+        if (attacker.id === victim.id) return;
 
-        const damage = Number(data.damage) || 25;
+        const damage = Math.max(1, Math.min(100, Number(data.damage) || 10));
 
         victim.health -= damage;
 
-        console.log(
-            `${attacker.name} hit ${victim.name} for ${damage}`
-        );
+        console.log(`${attacker.name} hit ${victim.name} for ${damage}`);
+
+        socket.emit("pvpHitConfirmed", {
+            targetId: victim.id,
+            targetName: victim.name,
+            targetHealth: victim.health
+        });
+
+        io.to(victim.id).emit("pvpDamaged", {
+            damage,
+            attackerId: attacker.id,
+            attackerName: attacker.name
+        });
 
         if (victim.health <= 0) {
-
             attacker.kills++;
             victim.deaths++;
-
-            io.emit("playerKilled", {
-                killer: attacker.name,
-                victim: victim.name
-            });
-
             victim.health = 100;
 
-            // Respawn
             victim.x = 0;
             victim.y = 1.7;
             victim.z = 0;
 
+            io.emit("pvpKilled", {
+                killerId: attacker.id,
+                killerName: attacker.name,
+                victimId: victim.id,
+                victimName: victim.name
+            });
         }
 
-        io.emit("playerHealthUpdate", {
-            id: victim.id,
-            health: victim.health
-        });
-
         io.emit("playerMoved", victim);
-
+        io.emit("playerMoved", attacker);
     }
 
-    socket.on("playerHit", data => {
-        handleDamage(socket.id, data);
-    });
-
-    socket.on("playerShot", data => {
-        handleDamage(socket.id, data);
-    });
+    // IMPORTANT:
+    // Only listen to playerShot so damage does not happen twice.
+    socket.on("playerShot", handlePvpShot);
 
     socket.on("disconnect", () => {
-
         console.log("Player disconnected:", socket.id);
 
         delete players[socket.id];
 
         io.emit("playerLeft", socket.id);
-
     });
-
 });
 
-// Backup sync every second
 setInterval(() => {
-
     io.emit("currentPlayers", players);
-
 }, 1000);
 
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, "0.0.0.0", () => {
-
     console.log(`Server running on port ${PORT}`);
-
 });
