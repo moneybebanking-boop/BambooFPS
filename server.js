@@ -18,10 +18,11 @@ const io = new Server(server, {
 const players = {};
 
 app.get("/", (req, res) => {
-    res.send("Bamboo FPS multiplayer server is running with PVP");
+    res.send("Bamboo FPS multiplayer server is running");
 });
 
 io.on("connection", socket => {
+
     console.log("Player connected:", socket.id);
 
     players[socket.id] = {
@@ -33,91 +34,116 @@ io.on("connection", socket => {
         yaw: 0,
         pitch: 0,
         mode: "menu",
-        health: 100
+        health: 100,
+        kills: 0,
+        deaths: 0
     };
 
     socket.emit("currentPlayers", players);
     socket.broadcast.emit("playerJoined", players[socket.id]);
 
     socket.on("updatePlayer", data => {
-        if (!players[socket.id]) return;
 
-        const oldHealth = players[socket.id].health ?? 100;
+        if (!players[socket.id]) return;
 
         players[socket.id] = {
             ...players[socket.id],
             ...data,
-            id: socket.id,
-            // Preserve server-side PVP health unless the player is respawning/resetting.
-            health: Number(data?.health ?? oldHealth)
+            id: socket.id
         };
 
         socket.broadcast.emit("playerMoved", players[socket.id]);
-    });
 
-    socket.on("playerShot", data => {
-        const attacker = players[socket.id];
-        const targetId = data?.targetId;
-        const target = players[targetId];
-
-        if (!attacker || !target || targetId === socket.id) return;
-
-        const rawDamage = Number(data?.damage || 0);
-        const damage = Math.max(0, Math.min(rawDamage, 150));
-        if (damage <= 0) return;
-
-        target.health = Math.max(0, (target.health ?? 100) - damage);
-
-        io.to(targetId).emit("pvpDamaged", {
-            attackerId: socket.id,
-            attackerName: attacker.name || "Player",
-            damage,
-            targetHealth: target.health
-        });
-
-        socket.emit("pvpHitConfirmed", {
-            targetId,
-            targetName: target.name || "Player",
-            damage,
-            targetHealth: target.health
-        });
-
-        if (target.health <= 0) {
-            io.emit("pvpKilled", {
-                killerId: socket.id,
-                killerName: attacker.name || "Player",
-                victimId: targetId,
-                victimName: target.name || "Player"
-            });
-
-            // Respawn target health on the server so they can keep playing.
-            target.health = 100;
-        }
-
-        io.emit("currentPlayers", players);
     });
 
     socket.on("chatMessage", msg => {
+
         io.emit("chatMessage", {
             id: socket.id,
             name: players[socket.id]?.name || "Player",
             message: msg
         });
+
+    });
+
+    // =========================
+    // PvP DAMAGE SYSTEM
+    // =========================
+
+    function handleDamage(attackerId, data) {
+
+        const victim = players[data.targetId];
+        const attacker = players[attackerId];
+
+        if (!victim || !attacker) return;
+
+        const damage = Number(data.damage) || 25;
+
+        victim.health -= damage;
+
+        console.log(
+            `${attacker.name} hit ${victim.name} for ${damage}`
+        );
+
+        if (victim.health <= 0) {
+
+            attacker.kills++;
+            victim.deaths++;
+
+            io.emit("playerKilled", {
+                killer: attacker.name,
+                victim: victim.name
+            });
+
+            victim.health = 100;
+
+            // Respawn
+            victim.x = 0;
+            victim.y = 1.7;
+            victim.z = 0;
+
+        }
+
+        io.emit("playerHealthUpdate", {
+            id: victim.id,
+            health: victim.health
+        });
+
+        io.emit("playerMoved", victim);
+
+    }
+
+    socket.on("playerHit", data => {
+        handleDamage(socket.id, data);
+    });
+
+    socket.on("playerShot", data => {
+        handleDamage(socket.id, data);
     });
 
     socket.on("disconnect", () => {
+
         console.log("Player disconnected:", socket.id);
+
         delete players[socket.id];
+
         io.emit("playerLeft", socket.id);
+
     });
+
 });
 
+// Backup sync every second
 setInterval(() => {
+
     io.emit("currentPlayers", players);
+
 }, 1000);
 
 const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, "0.0.0.0", () => {
+
     console.log(`Server running on port ${PORT}`);
+
 });
