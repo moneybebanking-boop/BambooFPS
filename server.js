@@ -44,11 +44,17 @@ io.on("connection", socket => {
     socket.on("updatePlayer", data => {
         if (!players[socket.id]) return;
 
+        const oldHealth = players[socket.id].health;
+        const oldKills = players[socket.id].kills;
+        const oldDeaths = players[socket.id].deaths;
+
         players[socket.id] = {
             ...players[socket.id],
             ...data,
             id: socket.id,
-            health: players[socket.id].health
+            health: oldHealth,
+            kills: oldKills,
+            deaths: oldDeaths
         };
 
         socket.broadcast.emit("playerMoved", players[socket.id]);
@@ -62,7 +68,7 @@ io.on("connection", socket => {
         });
     });
 
-    function handlePvpShot(data) {
+    function handlePvpShot(data = {}) {
         const attacker = players[socket.id];
         const victim = players[data.targetId];
 
@@ -70,15 +76,15 @@ io.on("connection", socket => {
         if (attacker.id === victim.id) return;
 
         const damage = Math.max(1, Math.min(100, Number(data.damage) || 10));
-
         victim.health -= damage;
 
-        console.log(`${attacker.name} hit ${victim.name} for ${damage}`);
+        console.log(`${attacker.name} hit ${victim.name} for ${damage}. ${victim.name} HP: ${victim.health}`);
 
         socket.emit("pvpHitConfirmed", {
             targetId: victim.id,
             targetName: victim.name,
-            targetHealth: victim.health
+            targetHealth: Math.max(0, victim.health),
+            damage
         });
 
         io.to(victim.id).emit("pvpDamaged", {
@@ -88,13 +94,8 @@ io.on("connection", socket => {
         });
 
         if (victim.health <= 0) {
-            attacker.kills++;
-            victim.deaths++;
-            victim.health = 100;
-
-            victim.x = 0;
-            victim.y = 1.7;
-            victim.z = 0;
+            attacker.kills += 1;
+            victim.deaths += 1;
 
             io.emit("pvpKilled", {
                 killerId: attacker.id,
@@ -102,21 +103,26 @@ io.on("connection", socket => {
                 victimId: victim.id,
                 victimName: victim.name
             });
+
+            victim.health = 100;
+            victim.x = 0;
+            victim.y = 1.7;
+            victim.z = 0;
         }
 
         io.emit("playerMoved", victim);
         io.emit("playerMoved", attacker);
     }
 
-    // IMPORTANT:
-    // Only listen to playerShot so damage does not happen twice.
+    // Client should emit this when a raycast hits another player.
     socket.on("playerShot", handlePvpShot);
+
+    // Kept for backwards compatibility, but only use one of these on the client.
+    socket.on("playerHit", handlePvpShot);
 
     socket.on("disconnect", () => {
         console.log("Player disconnected:", socket.id);
-
         delete players[socket.id];
-
         io.emit("playerLeft", socket.id);
     });
 });
